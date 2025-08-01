@@ -1,14 +1,50 @@
-import React, { useState, useMemo, useCallback } from 'react';
-import { Alert, Linking } from 'react-native';
+import React, { useState, useEffect, useCallback, useReducer } from 'react';
+import { View, Alert, StyleSheet, AppState, AppStateStatus, TouchableOpacity, Text } from 'react-native';
 import { NavigationContainer } from '@react-navigation/native';
-import { createNativeStackNavigator, NativeStackScreenProps } from '@react-navigation/native-stack';
-import { createBottomTabNavigator, BottomTabScreenProps } from '@react-navigation/bottom-tabs';
+import { createNativeStackNavigator } from '@react-navigation/native-stack';
+import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { StatusBar } from "expo-status-bar";
+import { SafeAreaProvider } from 'react-native-safe-area-context';
 
-import { AuthScreen, UserRole, MainScreen, Job, Applicant, Conversation, Message, FacilityType, ShiftType, VerificationMethod, UploadedDocuments, UploadedFile, DocumentItemConfig, Tab, DocumentKey, AppStackParamList, AppNavigationProp } from './types';
+// Import API services
+import {
+    authService,
+    jobsService,
+    documentsService,
+    messagesService,
+    userService,
+    APIError
+} from './services/api';
+
+// Import types
+import {
+    AuthScreen,
+    UserRole,
+    MainScreen,
+    Job,
+    JobStatus,
+    Applicant,
+    Conversation,
+    Message,
+    FacilityType,
+    ShiftType,
+    VerificationMethod,
+    UploadedDocuments,
+    UploadedFile,
+    DocumentItemConfig,
+    DocumentKey,
+    AppStackParamList,
+    AppNavigationProp
+} from './types';
+
+// Import components
 import Header from './components/Header';
 import BottomNav from './components/BottomNav';
 import HomeScreen from './components/HomeScreen';
+import LoadingScreen from './components/LoadingScreen';
+import ErrorBoundary from './components/ErrorBoundary';
+
+// Import screens
 import WelcomeScreen from './screens/WelcomeScreen';
 import LoginScreen from './screens/LoginScreen';
 import SignupScreen from './screens/SignupScreen';
@@ -28,15 +64,7 @@ import ChatScreen from './screens/ChatScreen';
 import ApplicantProfileScreen from './screens/ApplicantProfileScreen';
 import JobDetailsScreen from './screens/JobDetailsScreen';
 
-// Mock data and helpers
-const getISODate = (daysOffset = 0) => {
-    const date = new Date();
-    date.setDate(date.getDate() + daysOffset);
-    return date.toISOString().split('T')[0];
-};
-
-const mockFile = (name: string): UploadedFile => ({ uri: 'mock://path/to/' + name, name });
-
+// Constants
 const PHARMACIST_DOCS: DocumentItemConfig[] = [
     { key: 'psz', title: "PSZ Certificate", description: "Pharmaceutical Society of Zimbabwe" },
     { key: 'hpa', title: "HPA Certificate", description: "Health Professions Authority" },
@@ -48,87 +76,7 @@ const PHARMACY_DOCS: DocumentItemConfig[] = [
     { key: 'pharmacyMcaz', title: "MCAZ Premises Certificate", description: "Medicines Control Authority of Zimbabwe" },
 ];
 
-const initialUploadedDocs: UploadedDocuments = {
-    psz: null, hpa: null, cv: null, pharmacyHpa: null, pharmacyMcaz: null
-};
-
-// Mock user data storage - in a real app, this would be stored in a database
-const mockUserData: { [key: string]: { documents: UploadedDocuments; isLicenseVerified: boolean; isContactVerified: boolean; isPremium: boolean } } = {
-    'thabani@email.com': {
-        documents: {
-            psz: mockFile('thabani_psz.pdf'),
-            hpa: mockFile('thabani_hpa.pdf'),
-            cv: mockFile('thabani_cv.pdf'),
-            pharmacyHpa: null,
-            pharmacyMcaz: null
-        },
-        isLicenseVerified: true, // Existing user - already verified
-        isContactVerified: true,
-        isPremium: true
-    },
-    'manager@citypharm.com': {
-        documents: {
-            psz: null,
-            hpa: null,
-            cv: null,
-            pharmacyHpa: mockFile('citypharm_hpa.pdf'),
-            pharmacyMcaz: mockFile('citypharm_mcaz.pdf')
-        },
-        isLicenseVerified: false,
-        isContactVerified: true,
-        isPremium: false
-    },
-    'newuser@email.com': {
-        documents: initialUploadedDocs, // No documents uploaded yet
-        isLicenseVerified: false, // New user - needs approval after document upload
-        isContactVerified: true,
-        isPremium: false
-    },
-    // New users or users without documents will not be in this mock data
-};
-
-const mockInitialJobs: Job[] = [
-    // Jobs posted by other pharmacies (for pharmacist users to apply to)
-    { id: 'job1', pharmacy: 'Greenwood Pharmacy', location: 'Harare', rate: '$7/hr', role: 'Locum Pharmacist', date: getISODate(0), time: '2pm - 6pm', facilityType: FacilityType.Retail, shiftType: ShiftType.Afternoon, status: 'Active', applicants: [{id: 'p1', name: 'Thabani', rating: 4.8, isPremium: true, shiftsCompleted: 25, documents: { psz: mockFile('psz.pdf'), hpa: mockFile('hpa.pdf'), cv: null, pharmacyHpa: null, pharmacyMcaz: null }}], description: 'Seeking a diligent locum pharmacist for an afternoon shift. Responsibilities include dispensing medication, advising patients, and managing inventory.', savedApplicants: [] },
-    { id: 'job2', pharmacy: 'Riverside Pharmacy', location: 'Harare', rate: '$7/hr', role: 'Locum Pharmacist', date: getISODate(1), time: '9am - 5pm', facilityType: FacilityType.Clinic, shiftType: ShiftType.Morning, status: 'Active', applicants: [], description: 'Join our clinic team for a day shift. We need a reliable pharmacist to assist with patient consultations and prescription management.', savedApplicants: [] },
-    { id: 'job3', pharmacy: 'ABC Pharmacy', location: 'Bulawayo', rate: '$8/hr', role: 'Locum Pharmacist', date: getISODate(5), time: '8am - 8pm', facilityType: FacilityType.Retail, shiftType: ShiftType.Morning, status: 'Active', applicants: [], description: 'Full-day coverage needed for our busy retail location. Must be experienced with high volume and have excellent customer service skills.', savedApplicants: [] },
-
-    // Jobs posted by City Pharmacy (for pharmacy users to manage)
-    { id: 'city-job-1', pharmacy: 'City Pharmacy', location: '123 Main St, Harare', rate: '$8/hr', role: 'Locum Pharmacist', date: getISODate(2), time: '9am - 5pm', facilityType: FacilityType.Retail, shiftType: ShiftType.Morning, status: 'Active', applicants: [
-            {id: 'applicant-1', name: 'Sarah Johnson', rating: 4.5, isPremium: false, shiftsCompleted: 18, documents: { psz: mockFile('sarah_psz.pdf'), hpa: mockFile('sarah_hpa.pdf'), cv: mockFile('sarah_cv.pdf'), pharmacyHpa: null, pharmacyMcaz: null }},
-            {id: 'applicant-2', name: 'Michael Chen', rating: 4.9, isPremium: true, shiftsCompleted: 32, documents: { psz: mockFile('michael_psz.pdf'), hpa: mockFile('michael_hpa.pdf'), cv: mockFile('michael_cv.pdf'), pharmacyHpa: null, pharmacyMcaz: null }}
-        ], description: 'We need a reliable pharmacist for our busy retail location. Experience with customer service and inventory management preferred.', savedApplicants: [] },
-
-    { id: 'city-job-2', pharmacy: 'City Pharmacy', location: '123 Main St, Harare', rate: '$9/hr', role: 'Weekend Pharmacist', date: getISODate(7), time: '10am - 6pm', facilityType: FacilityType.Retail, shiftType: ShiftType.Morning, status: 'Confirmed', applicants: [], confirmedApplicant: {id: 'applicant-3', name: 'David Wilson', rating: 4.7, isPremium: true, shiftsCompleted: 28, documents: { psz: mockFile('david_psz.pdf'), hpa: mockFile('david_hpa.pdf'), cv: mockFile('david_cv.pdf'), pharmacyHpa: null, pharmacyMcaz: null }}, description: 'Weekend shift coverage needed. Must be available for both Saturday and Sunday.', savedApplicants: [] },
-
-    { id: 'city-job-3', pharmacy: 'City Pharmacy', location: '123 Main St, Harare', rate: '$8.5/hr', role: 'Evening Pharmacist', date: getISODate(-3), time: '2pm - 10pm', facilityType: FacilityType.Retail, shiftType: ShiftType.Evening, status: 'Completed', applicants: [], confirmedApplicant: {id: 'applicant-4', name: 'Lisa Thompson', rating: 4.6, isPremium: false, shiftsCompleted: 22, documents: { psz: mockFile('lisa_psz.pdf'), hpa: mockFile('lisa_hpa.pdf'), cv: mockFile('lisa_cv.pdf'), pharmacyHpa: null, pharmacyMcaz: null }}, description: 'Evening shift to cover our extended hours. Experience with night operations preferred.', savedApplicants: [], pharmacistRating: 5, pharmacistFeedback: 'Excellent work! Very professional and handled the evening rush perfectly.' },
-
-    { id: 'city-job-4', pharmacy: 'City Pharmacy', location: '123 Main St, Harare', rate: '$7.5/hr', role: 'Relief Pharmacist', date: getISODate(14), time: '8am - 4pm', facilityType: FacilityType.Retail, shiftType: ShiftType.Morning, status: 'Active', applicants: [
-            {id: 'applicant-5', name: 'Robert Brown', rating: 4.2, isPremium: false, shiftsCompleted: 15, documents: { psz: mockFile('robert_psz.pdf'), hpa: mockFile('robert_hpa.pdf'), cv: null, pharmacyHpa: null, pharmacyMcaz: null }}
-        ], description: 'Temporary relief needed for our regular pharmacist who will be away. Must be comfortable working independently.', savedApplicants: [
-            {id: 'applicant-6', name: 'Emma Davis', rating: 4.8, isPremium: true, shiftsCompleted: 45, documents: { psz: mockFile('emma_psz.pdf'), hpa: mockFile('emma_hpa.pdf'), cv: mockFile('emma_cv.pdf'), pharmacyHpa: null, pharmacyMcaz: null }}
-        ] },
-];
-
-const mockPharmacistJobs: Job[] = [
-    { id: 'myjob-1', pharmacy: 'Cospharm Group', location: 'Harare', rate: '$8/hr', role: 'Locum Pharmacist', date: getISODate(-1), time: '9am - 5pm', facilityType: FacilityType.Retail, shiftType: ShiftType.Morning, status: 'Completed', rating: 5, description: '', savedApplicants: [] },
-    { id: 'myjob-to-complete', pharmacy: 'City Centre Meds', location: 'CBD', rate: '$7.5/hr', role: 'Locum Pharmacist', date: getISODate(1), time: '12pm - 8pm', facilityType: FacilityType.Clinic, shiftType: ShiftType.Afternoon, status: 'Confirmed', description: '', savedApplicants: [] },
-    { id: 'myjob-to-review', pharmacy: 'Borrowdale Health', location: 'Borrowdale', rate: '$9.5/hr', role: 'Locum Pharmacist', date: getISODate(-7), time: '8am - 4pm', facilityType: FacilityType.Retail, shiftType: ShiftType.Morning, status: 'Completed', description: '', savedApplicants: [] },
-];
-
-const mockConversations: Conversation[] = [
-    {
-        id: 'myjob-to-complete',
-        pharmacyName: 'City Centre Meds',
-        pharmacistName: 'Thabani',
-        jobRole: 'Locum Pharmacist',
-        messages: [
-            { id: 'msg1', text: "Hi Thabani, looking forward to having you tomorrow.", sender: UserRole.Pharmacy, timestamp: '10:30 AM' },
-        ],
-    },
-];
-
-// Navigation Param Lists
+// Navigation types
 type MainTabsParamList = {
     Home: undefined;
     Explore?: undefined;
@@ -140,290 +88,899 @@ const AuthStack = createNativeStackNavigator<AppStackParamList>();
 const MainStack = createNativeStackNavigator<AppStackParamList>();
 const TabNav = createBottomTabNavigator<MainTabsParamList>();
 
+// State management
+interface AppState {
+    // Authentication
+    isAuthenticated: boolean;
+    isLoading: boolean;
+    isInitializing: boolean;
+
+    // User data
+    userId: string;
+    userRole: UserRole | null;
+    userName: string;
+    userEmail: string;
+    userPhone: string;
+    isPremium: boolean;
+    pharmacyAddress: string;
+
+    // Verification status
+    isLicenseVerified: boolean;
+    isContactVerified: boolean;
+    uploadedDocuments: UploadedDocuments;
+
+    // Job data
+    myJobs: Job[];
+    allJobs: Job[];
+    appliedJobIds: Set<string>;
+    savedJobIds: Set<string>;
+    conversations: Conversation[];
+    jobToReviewId: string | null;
+
+    // Error handling
+    error: string | null;
+    isOffline: boolean;
+}
+
+type AppAction =
+    | { type: 'SET_LOADING'; payload: boolean }
+    | { type: 'SET_INITIALIZING'; payload: boolean }
+    | { type: 'SET_AUTHENTICATED'; payload: boolean }
+    | { type: 'SET_USER_DATA'; payload: Partial<AppState> }
+    | { type: 'SET_ERROR'; payload: string | null }
+    | { type: 'SET_OFFLINE'; payload: boolean }
+    | { type: 'UPDATE_JOBS'; payload: { myJobs?: Job[]; allJobs?: Job[] } }
+    | { type: 'UPDATE_JOB_INTERACTIONS'; payload: { appliedJobIds?: Set<string>; savedJobIds?: Set<string> } }
+    | { type: 'SET_CONVERSATIONS'; payload: Conversation[] }
+    | { type: 'RESET_STATE' };
+
+const initialState: AppState = {
+    isAuthenticated: false,
+    isLoading: true,
+    isInitializing: true,
+    userId: '',
+    userRole: null,
+    userName: '',
+    userEmail: '',
+    userPhone: '',
+    isPremium: false,
+    pharmacyAddress: '',
+    isLicenseVerified: false,
+    isContactVerified: false,
+    uploadedDocuments: {} as UploadedDocuments,
+    myJobs: [],
+    allJobs: [],
+    appliedJobIds: new Set(),
+    savedJobIds: new Set(),
+    conversations: [],
+    jobToReviewId: null,
+    error: null,
+    isOffline: false,
+};
+
+// Type-safe helper functions
+const updateJobStatus = (jobs: Job[], jobId: string, newStatus: JobStatus): Job[] => {
+    return jobs.map(job =>
+        job.id === jobId ? { ...job, status: newStatus } : job
+    );
+};
+
+const updateJobRating = (
+    jobs: Job[],
+    jobId: string,
+    ratingField: keyof Pick<Job, 'pharmacistRating' | 'pharmacyRating'>,
+    rating: number,
+    feedbackField: keyof Pick<Job, 'pharmacistFeedback' | 'pharmacyFeedback'>,
+    feedback?: string
+): Job[] => {
+    return jobs.map(job =>
+        job.id === jobId
+            ? {
+                ...job,
+                [ratingField]: rating,
+                [feedbackField]: feedback
+            }
+            : job
+    );
+};
+
+function appStateReducer(state: AppState, action: AppAction): AppState {
+    switch (action.type) {
+        case 'SET_LOADING':
+            return { ...state, isLoading: action.payload };
+        case 'SET_INITIALIZING':
+            return { ...state, isInitializing: action.payload };
+        case 'SET_AUTHENTICATED':
+            return { ...state, isAuthenticated: action.payload };
+        case 'SET_USER_DATA':
+            return { ...state, ...action.payload };
+        case 'SET_ERROR':
+            return { ...state, error: action.payload, isLoading: false };
+        case 'SET_OFFLINE':
+            return { ...state, isOffline: action.payload };
+        case 'UPDATE_JOBS':
+            return {
+                ...state,
+                myJobs: action.payload.myJobs ?? state.myJobs,
+                allJobs: action.payload.allJobs ?? state.allJobs
+            };
+        case 'UPDATE_JOB_INTERACTIONS':
+            return {
+                ...state,
+                appliedJobIds: action.payload.appliedJobIds ?? state.appliedJobIds,
+                savedJobIds: action.payload.savedJobIds ?? state.savedJobIds
+            };
+        case 'SET_CONVERSATIONS':
+            return { ...state, conversations: action.payload };
+        case 'RESET_STATE':
+            return { ...initialState, isInitializing: false, isLoading: false };
+        default:
+            return state;
+    }
+}
+
 function AppContent() {
-    const [isAuthenticated, setIsAuthenticated] = useState(false);
-    const [userRole, setUserRole] = useState<UserRole | null>(null);
-    const [userName, setUserName] = useState<string>('');
-    const [userEmail, setUserEmail] = useState<string>('');
-    const [userPhone, setUserPhone] = useState<string>('');
-    const [isPremium, setIsPremium] = useState(false);
-    const [pharmacyAddress, setPharmacyAddress] = useState<string>('');
-    const [uploadedDocuments, setUploadedDocuments] = useState<UploadedDocuments>(initialUploadedDocs);
-    const [isLicenseVerified, setIsLicenseVerified] = useState(false);
-    const [isContactVerified, setIsContactVerified] = useState(false);
-    const [myJobs, setMyJobs] = useState<Job[]>([]);
-    const [jobToReviewId, setJobToReviewId] = useState<string | null>(null);
-    const [allJobs, setAllJobs] = useState<Job[]>(mockInitialJobs);
-    const [appliedJobIds, setAppliedJobIds] = useState<Set<string>>(new Set());
-    const [savedJobIds, setSavedJobIds] = useState<Set<string>>(new Set());
-    const [conversations, setConversations] = useState<Conversation[]>([]);
+    const [state, dispatch] = useReducer(appStateReducer, initialState);
 
-    // Handlers
-    const handleLogin = (role: UserRole) => {
-        setIsAuthenticated(true);
-        setUserRole(role);
+    // Initialize app
+    useEffect(() => {
+        initializeApp();
 
-        const email = role === UserRole.Pharmacist ? 'thabani@email.com' : 'manager@citypharm.com';
-        const name = role === UserRole.Pharmacist ? 'Thabani' : 'City Pharmacy';
-        const phone = role === UserRole.Pharmacist ? '(+263) 77 123 4567' : '(+263) 4 555 666';
+        // Handle app state changes
+        const handleAppStateChange = (nextAppState: AppStateStatus) => {
+            if (nextAppState === 'active' && state.isAuthenticated) {
+                refreshUserData();
+            }
+        };
 
-        setUserName(name);
-        setUserEmail(email);
-        setUserPhone(phone);
+        const subscription = AppState.addEventListener('change', handleAppStateChange);
+        return () => subscription?.remove();
+    }, []);
 
-        // Check if user has existing data
-        const existingUserData = mockUserData[email];
+    const initializeApp = async () => {
+        try {
+            dispatch({ type: 'SET_INITIALIZING', payload: true });
 
-        if (existingUserData) {
-            // User has existing data - load it
-            setUploadedDocuments(existingUserData.documents);
-            setIsLicenseVerified(existingUserData.isLicenseVerified);
-            setIsContactVerified(existingUserData.isContactVerified);
-            setIsPremium(existingUserData.isPremium);
-        } else {
-            // New user - start with empty documents
-            setUploadedDocuments(initialUploadedDocs);
-            setIsLicenseVerified(false);
-            setIsContactVerified(true); // Assume contact was verified during signup
-            setIsPremium(false);
-        }
-
-        if (role === UserRole.Pharmacist) {
-            setMyJobs([]);
-            setAppliedJobIds(new Set());
-            setSavedJobIds(new Set());
-            setJobToReviewId(null);
-            setConversations([]);
-        } else {
-            setPharmacyAddress('123 Main St, Harare');
-            setConversations([]);
+            const user = await authService.getCurrentUser();
+            if (user) {
+                await setupUserSession(user);
+            }
+        } catch (error) {
+            console.error('App initialization error:', error);
+            handleError(error, 'Failed to initialize app');
+        } finally {
+            dispatch({ type: 'SET_INITIALIZING', payload: false });
+            dispatch({ type: 'SET_LOADING', payload: false });
         }
     };
 
-    const handleLogout = () => {
-        setIsAuthenticated(false);
-        setUserRole(null); setUserName(''); setUserEmail(''); setUserPhone(''); setIsPremium(false);
-        setPharmacyAddress(''); setUploadedDocuments(initialUploadedDocs); setIsLicenseVerified(false);
-        setIsContactVerified(false); setMyJobs([]); setJobToReviewId(null);
-        setAppliedJobIds(new Set()); setSavedJobIds(new Set()); setConversations([]);
-    };
+    const setupUserSession = async (user: any) => {
+        try {
+            dispatch({ type: 'SET_LOADING', payload: true });
 
-    const handleDocumentsUploaded = (docs: UploadedDocuments) => {
-        setUploadedDocuments(docs);
+            // Set basic user data
+            dispatch({
+                type: 'SET_USER_DATA',
+                payload: {
+                    userId: user.id,
+                    userRole: user.role,
+                    userEmail: user.email,
+                    isContactVerified: user.isEmailVerified && user.isPhoneVerified,
+                }
+            });
 
-        // Update mock user data storage (in a real app, this would be an API call)
-        if (userEmail && mockUserData[userEmail]) {
-            mockUserData[userEmail].documents = docs;
+            // Load full profile
+            const profile = await userService.getProfile();
 
-            // License verification is NOT automatic for new users
-            // Only existing users who have already been verified should have isLicenseVerified: true
-            // New users must wait for manual approval after document submission
+            if (user.role === UserRole.Pharmacist) {
+                dispatch({
+                    type: 'SET_USER_DATA',
+                    payload: {
+                        userName: `${profile.firstName} ${profile.lastName}`,
+                        userPhone: profile.phone,
+                        isPremium: profile.isPremium,
+                        isLicenseVerified: profile.licenseVerificationStatus === 'verified',
+                    }
+                });
+
+                await loadPharmacistData();
+            } else {
+                dispatch({
+                    type: 'SET_USER_DATA',
+                    payload: {
+                        userName: profile.pharmacyName,
+                        userPhone: profile.phone,
+                        pharmacyAddress: profile.address,
+                    }
+                });
+
+                await loadPharmacyData();
+            }
+
+            // Load documents
+            await loadUserDocuments();
+
+            dispatch({ type: 'SET_AUTHENTICATED', payload: true });
+        } catch (error) {
+            console.error('Failed to setup user session:', error);
+            await handleLogout();
+            handleError(error, 'Failed to load user data');
         }
     };
 
-    const handleApplyToJob = useCallback((jobId: string) => {
-        if (!isLicenseVerified || !userName || userRole !== UserRole.Pharmacist) return;
-        const completedJobs = myJobs.filter(job => job.status === 'Completed');
-        const ratedJobs = completedJobs.filter(job => job.rating !== undefined && job.rating > 0);
-        const overallRating = ratedJobs.length > 0 ? parseFloat((ratedJobs.reduce((sum, job) => sum + (job.rating || 0), 0) / ratedJobs.length).toFixed(1)) : 0;
+    const loadUserDocuments = async () => {
+        try {
+            const docs = await documentsService.getDocuments();
+            const documentsMap: UploadedDocuments = {} as UploadedDocuments;
 
-        const applicant: Applicant = {
-            id: `user-${Date.now()}`, name: userName, rating: overallRating, isPremium,
-            shiftsCompleted: completedJobs.length, documents: uploadedDocuments
-        };
-
-        setAllJobs(prevJobs => prevJobs.map(job =>
-            job.id === jobId ? { ...job, applicants: [...(job.applicants || []), applicant] } : job
-        ));
-        setAppliedJobIds(prevIds => new Set(prevIds).add(jobId));
-        setSavedJobIds(prevIds => { const newSet = new Set(prevIds); newSet.delete(jobId); return newSet; });
-    }, [isLicenseVerified, userName, userRole, myJobs, isPremium, uploadedDocuments]);
-
-    const handleJobPosted = (jobData: Omit<Job, 'id' | 'pharmacy' | 'location' | 'status' | 'applicants'>) => {
-        if (userRole !== UserRole.Pharmacy || !userName || !pharmacyAddress) return;
-        const newJob: Job = {
-            id: `job-${Date.now()}`, pharmacy: userName, location: pharmacyAddress,
-            status: 'Active', applicants: [], savedApplicants: [], ...jobData
-        };
-        setAllJobs(prev => [newJob, ...prev]);
-    };
-
-    const handleConfirmApplicant = (jobId: string, applicant: Applicant) => {
-        setAllJobs(prev => prev.map(j => j.id === jobId ? { ...j, status: 'Confirmed', confirmedApplicant: applicant } : j));
-        const newConversation: Conversation = {
-            id: jobId, pharmacyName: userName, pharmacistName: applicant.name,
-            jobRole: allJobs.find(j => j.id === jobId)!.role,
-            messages: [{ id: `msg-init-${Date.now()}`, text: `Hi ${applicant.name}, your application has been confirmed. Looking forward to having you!`, sender: UserRole.Pharmacy, timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) }]
-        };
-        setConversations(prev => [...prev, newConversation]);
-    };
-
-    const handleDeclineApplicant = (jobId: string, applicantId: string) => {
-        setAllJobs(prev => prev.map(j => j.id === jobId ? { ...j, applicants: (j.applicants || []).filter(a => a.id !== applicantId)} : j));
-    };
-
-    // Handler for saving applicants
-    const handleSaveApplicant = (jobId: string, applicant: Applicant) => {
-        setAllJobs(prev => prev.map(job => {
-            if (job.id === jobId) {
-                const savedApplicants = job.savedApplicants || [];
-                // Check if applicant is already saved
-                if (!savedApplicants.find(saved => saved.id === applicant.id)) {
-                    return {
-                        ...job,
-                        savedApplicants: [...savedApplicants, applicant],
-                        // Remove from active applicants
-                        applicants: (job.applicants || []).filter(a => a.id !== applicant.id)
+            docs.forEach(doc => {
+                if (doc.status === 'approved') {
+                    documentsMap[doc.documentType as DocumentKey] = {
+                        uri: doc.fileUrl,
+                        name: doc.fileName
                     };
                 }
+            });
+
+            dispatch({
+                type: 'SET_USER_DATA',
+                payload: { uploadedDocuments: documentsMap }
+            });
+        } catch (error) {
+            console.error('Failed to load documents:', error);
+            handleError(error, 'Failed to load documents');
+        }
+    };
+
+    const loadPharmacistData = async () => {
+        try {
+            // Load available jobs
+            const jobsResponse = await jobsService.searchJobs({ page: 1, limit: 20 });
+
+            // Mark applied and saved jobs
+            const appliedIds = new Set<string>();
+            const savedIds = new Set<string>();
+
+            jobsResponse.jobs.forEach(job => {
+                if (job.hasApplied) appliedIds.add(job.id);
+                if (job.isSaved) savedIds.add(job.id);
+            });
+
+            // Load my confirmed jobs
+            const myJobsResponse = await jobsService.getMyJobs();
+
+            // Check if any job needs review
+            const needsReview = myJobsResponse.find(job =>
+                job.status === 'completed' && !job.pharmacyRating
+            );
+
+            dispatch({
+                type: 'UPDATE_JOBS',
+                payload: { allJobs: jobsResponse.jobs, myJobs: myJobsResponse }
+            });
+
+            dispatch({
+                type: 'UPDATE_JOB_INTERACTIONS',
+                payload: { appliedJobIds: appliedIds, savedJobIds: savedIds }
+            });
+
+            dispatch({
+                type: 'SET_USER_DATA',
+                payload: { jobToReviewId: needsReview?.id || null }
+            });
+
+            // Load conversations
+            await loadConversations();
+        } catch (error) {
+            console.error('Failed to load pharmacist data:', error);
+            handleError(error, 'Failed to load job data');
+        }
+    };
+
+    const loadPharmacyData = async () => {
+        try {
+            // Load posted jobs
+            const postedJobs = await jobsService.getPharmacyJobs();
+            dispatch({ type: 'UPDATE_JOBS', payload: { allJobs: postedJobs } });
+
+            // Load conversations
+            await loadConversations();
+
+            // Load dashboard stats
+            await userService.getDashboardStats();
+        } catch (error) {
+            console.error('Failed to load pharmacy data:', error);
+            handleError(error, 'Failed to load pharmacy data');
+        }
+    };
+
+    const loadConversations = async () => {
+        try {
+            const convos = await messagesService.getConversations();
+            dispatch({ type: 'SET_CONVERSATIONS', payload: convos });
+        } catch (error) {
+            console.error('Failed to load conversations:', error);
+            handleError(error, 'Failed to load messages');
+        }
+    };
+
+    const refreshUserData = async () => {
+        if (!state.isAuthenticated) return;
+
+        try {
+            if (state.userRole === UserRole.Pharmacist) {
+                await loadPharmacistData();
+            } else {
+                await loadPharmacyData();
             }
-            return job;
-        }));
+        } catch (error) {
+            console.error('Failed to refresh data:', error);
+        }
     };
 
-    // Handler for marking job as completed
-    const handleMarkJobAsCompleted = (jobId: string) => {
-        setAllJobs(prev => prev.map(job =>
-            job.id === jobId ? { ...job, status: 'Completed' } : job
-        ));
-    };
+    // Error handling
+    const handleError = (error: any, fallbackMessage: string) => {
+        let errorMessage = fallbackMessage;
 
-    // Enhanced handler for rating pharmacist - now supports feedback
-    const handleRatePharmacist = (jobId: string, rating: number, feedback?: string) => {
-        setAllJobs(prev => prev.map(job =>
-            job.id === jobId ? {
-                ...job,
-                pharmacistRating: rating,
-                pharmacistFeedback: feedback
-            } : job
-        ));
-    };
+        if (error instanceof APIError) {
+            errorMessage = error.message;
 
-    const handleSendMessage = (conversationId: string, text: string) => {
-        if (!userRole) return;
-        const newMessage: Message = { id: `msg-${Date.now()}`, text, sender: userRole, timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })};
-        setConversations(prev => prev.map(c => c.id === conversationId ? { ...c, messages: [...c.messages, newMessage] } : c));
-    };
+            // Handle specific error codes
+            if (error.statusCode === 401) {
+                handleLogout();
+                return;
+            }
 
-    const handleSaveJob = (jobId: string) => setSavedJobIds(prev => new Set(prev).add(jobId));
-    const handleUnsaveJob = (jobId: string) => setSavedJobIds(prev => { const newSet = new Set(prev); newSet.delete(jobId); return newSet; });
-    const handleMarkAsCompleted = (jobId: string) => {
-        setMyJobs(prev => prev.map(j => j.id === jobId ? {...j, status: 'Completed'} : j));
-        setJobToReviewId(jobId);
-    };
-    const handleRateJob = (jobId: string, rating: number) => {
-        setMyJobs(prev => prev.map(j => j.id === jobId ? {...j, rating} : j));
-        if(jobToReviewId === jobId) setJobToReviewId(null);
-    }
-
-    const hasConversations = conversations.length > 0;
-    const docsForUser = userRole === UserRole.Pharmacist ? PHARMACIST_DOCS : PHARMACY_DOCS;
-    const docsCount = docsForUser.filter(doc => uploadedDocuments[doc.key]).length;
-    const isDocumentsComplete = docsCount === docsForUser.length;
-
-    const MainAppTabs = () => {
-        // Ensure userRole is not null before rendering
-        if (!userRole) {
-            return null;
+            if (error.statusCode === 0) {
+                dispatch({ type: 'SET_OFFLINE', payload: true });
+                errorMessage = 'You appear to be offline. Please check your connection.';
+            }
         }
 
+        dispatch({ type: 'SET_ERROR', payload: errorMessage });
+
+        // Auto-clear error after 5 seconds
+        setTimeout(() => {
+            dispatch({ type: 'SET_ERROR', payload: null });
+        }, 5000);
+    };
+
+    // Authentication handlers
+    const handleLogin = async (role: UserRole) => {
+        try {
+            dispatch({ type: 'SET_LOADING', payload: true });
+            dispatch({ type: 'SET_ERROR', payload: null });
+
+            // Demo credentials
+            const credentials = {
+                email: role === UserRole.Pharmacist ? 'demo.pharmacist@example.com' : 'demo.pharmacy@example.com',
+                password: 'Demo123!'
+            };
+
+            const response = await authService.login(credentials.email, credentials.password);
+            await setupUserSession(response.user);
+
+        } catch (error) {
+            handleError(error, 'Login failed. Please try again.');
+        } finally {
+            dispatch({ type: 'SET_LOADING', payload: false });
+        }
+    };
+
+    const handleLoginWithCredentials = async (email: string, password: string) => {
+        try {
+            dispatch({ type: 'SET_LOADING', payload: true });
+            dispatch({ type: 'SET_ERROR', payload: null });
+
+            const response = await authService.login(email, password);
+            await setupUserSession(response.user);
+        } catch (error) {
+            handleError(error, 'Login failed. Please check your credentials.');
+            throw error;
+        } finally {
+            dispatch({ type: 'SET_LOADING', payload: false });
+        }
+    };
+
+    const handleSignup = async (role: UserRole, name: string, email: string, password: string) => {
+        try {
+            dispatch({ type: 'SET_LOADING', payload: true });
+            dispatch({ type: 'SET_ERROR', payload: null });
+
+            const signupData = {
+                email,
+                password,
+                role,
+                phone: '',
+                ...(role === UserRole.Pharmacist
+                        ? {
+                            firstName: name.split(' ')[0] || name,
+                            lastName: name.split(' ')[1] || ''
+                        }
+                        : { pharmacyName: name }
+                ),
+            };
+
+            const response = await authService.signup(signupData);
+
+            // Set temporary data for onboarding flow
+            dispatch({
+                type: 'SET_USER_DATA',
+                payload: {
+                    userId: response.userId,
+                    userRole: role,
+                    userName: name,
+                    userEmail: email,
+                }
+            });
+
+        } catch (error) {
+            handleError(error, 'Signup failed. Please try again.');
+            throw error;
+        } finally {
+            dispatch({ type: 'SET_LOADING', payload: false });
+        }
+    };
+
+    const handleLogout = async () => {
+        try {
+            await authService.logout();
+            dispatch({ type: 'RESET_STATE' });
+        } catch (error) {
+            console.error('Logout error:', error);
+            // Force logout even if API call fails
+            dispatch({ type: 'RESET_STATE' });
+        }
+    };
+
+    // Document handlers
+    const handleDocumentsUploaded = async (docs: UploadedDocuments) => {
+        try {
+            dispatch({ type: 'SET_LOADING', payload: true });
+
+            // Upload each document
+            const uploadPromises = Object.entries(docs).map(async ([docType, file]) => {
+                if (file && !state.uploadedDocuments[docType as DocumentKey]) {
+                    await documentsService.uploadDocument(docType as DocumentKey, file);
+                }
+            });
+
+            await Promise.all(uploadPromises);
+
+            // Reload documents
+            await loadUserDocuments();
+
+            Alert.alert('Success', 'Documents uploaded successfully. They will be reviewed within 2-3 business days.');
+
+            // If this completes onboarding, set authenticated
+            if (!state.isAuthenticated && state.isContactVerified) {
+                dispatch({ type: 'SET_AUTHENTICATED', payload: true });
+            }
+
+        } catch (error) {
+            handleError(error, 'Failed to upload documents. Please try again.');
+        } finally {
+            dispatch({ type: 'SET_LOADING', payload: false });
+        }
+    };
+
+    // Job handlers
+    const handleApplyToJob = useCallback(async (jobId: string) => {
+        if (!state.isLicenseVerified || state.userRole !== UserRole.Pharmacist) {
+            Alert.alert('Cannot Apply', 'Your license must be verified to apply for jobs.');
+            return;
+        }
+
+        try {
+            await jobsService.applyToJob(jobId, {});
+
+            // Update local state
+            const newAppliedIds = new Set(state.appliedJobIds).add(jobId);
+            const newSavedIds = new Set(state.savedJobIds);
+            newSavedIds.delete(jobId);
+
+            dispatch({
+                type: 'UPDATE_JOB_INTERACTIONS',
+                payload: { appliedJobIds: newAppliedIds, savedJobIds: newSavedIds }
+            });
+
+            Alert.alert('Success', 'Application submitted successfully!');
+
+        } catch (error) {
+            if (error instanceof APIError && error.statusCode === 400) {
+                Alert.alert('Already Applied', 'You have already applied to this job.');
+            } else {
+                handleError(error, 'Failed to submit application. Please try again.');
+            }
+        }
+    }, [state.isLicenseVerified, state.userRole, state.appliedJobIds, state.savedJobIds]);
+
+    const handleSaveJob = useCallback(async (jobId: string) => {
+        try {
+            await jobsService.saveJob(jobId);
+            const newSavedIds = new Set(state.savedJobIds).add(jobId);
+            dispatch({
+                type: 'UPDATE_JOB_INTERACTIONS',
+                payload: { savedJobIds: newSavedIds }
+            });
+        } catch (error) {
+            handleError(error, 'Failed to save job');
+        }
+    }, [state.savedJobIds]);
+
+    const handleUnsaveJob = useCallback(async (jobId: string) => {
+        try {
+            await jobsService.unsaveJob(jobId);
+            const newSavedIds = new Set(state.savedJobIds);
+            newSavedIds.delete(jobId);
+            dispatch({
+                type: 'UPDATE_JOB_INTERACTIONS',
+                payload: { savedJobIds: newSavedIds }
+            });
+        } catch (error) {
+            handleError(error, 'Failed to unsave job');
+        }
+    }, [state.savedJobIds]);
+
+    // Additional handlers for job management, messages, etc.
+    const handleJobPosted = async (jobData: Omit<Job, 'id' | 'pharmacy' | 'location' | 'status' | 'applicants'>) => {
+        if (state.userRole !== UserRole.Pharmacy) return;
+
+        try {
+            const newJob = await jobsService.createJob({
+                ...jobData,
+                status: 'active' as JobStatus,
+                location_address: state.pharmacyAddress,
+                location_city: state.pharmacyAddress.split(',')[1]?.trim() || 'Harare'
+            });
+
+            await loadPharmacyData();
+            Alert.alert('Success', 'Job posted successfully!');
+        } catch (error) {
+            handleError(error, 'Failed to post job. Please try again.');
+        }
+    };
+
+    const handleSendMessage = async (conversationId: string, text: string) => {
+        if (!state.userRole) return;
+
+        try {
+            const newMessage = await messagesService.sendMessage(conversationId, text);
+
+            // Update local conversations
+            dispatch({
+                type: 'SET_CONVERSATIONS',
+                payload: state.conversations.map(c =>
+                    c.id === conversationId
+                        ? { ...c, messages: [...c.messages, newMessage] }
+                        : c
+                )
+            });
+        } catch (error) {
+            handleError(error, 'Failed to send message');
+        }
+    };
+
+    // Contact and verification handlers
+    const handleContactInfoComplete = async (phone: string, email: string, method: VerificationMethod) => {
+        try {
+            dispatch({ type: 'SET_LOADING', payload: true });
+
+            await userService.updateContactInfo({ phone, email });
+            dispatch({
+                type: 'SET_USER_DATA',
+                payload: { userPhone: phone, userEmail: email }
+            });
+
+            await authService.resendOTP(method === VerificationMethod.Email ? 'email' : 'phone');
+
+            Alert.alert('Success', `Verification code sent to your ${method === VerificationMethod.Email ? 'email' : 'phone'}`);
+        } catch (error) {
+            handleError(error, 'Failed to update contact info');
+            throw error;
+        } finally {
+            dispatch({ type: 'SET_LOADING', payload: false });
+        }
+    };
+
+    const handleVerifyOTP = async (code: string, method: VerificationMethod) => {
+        try {
+            dispatch({ type: 'SET_LOADING', payload: true });
+
+            await authService.verifyOTP(
+                code,
+                method === VerificationMethod.Email ? 'email' : 'phone'
+            );
+
+            dispatch({
+                type: 'SET_USER_DATA',
+                payload: { isContactVerified: true }
+            });
+
+            if (state.userId && state.uploadedDocuments) {
+                dispatch({ type: 'SET_AUTHENTICATED', payload: true });
+            }
+
+            Alert.alert('Success', 'Verification successful!');
+        } catch (error) {
+            handleError(error, 'Invalid verification code. Please try again.');
+            throw error;
+        } finally {
+            dispatch({ type: 'SET_LOADING', payload: false });
+        }
+    };
+
+    const handleAddressComplete = async (address: string) => {
+        try {
+            await userService.updateAddress(address);
+            dispatch({
+                type: 'SET_USER_DATA',
+                payload: { pharmacyAddress: address }
+            });
+
+            if (state.isContactVerified) {
+                dispatch({ type: 'SET_AUTHENTICATED', payload: true });
+            }
+        } catch (error) {
+            handleError(error, 'Failed to update address');
+            throw error;
+        }
+    };
+
+    // Component props
+    const hasConversations = state.conversations.length > 0;
+    const docsForUser = state.userRole === UserRole.Pharmacist ? PHARMACIST_DOCS : PHARMACY_DOCS;
+    const docsCount = docsForUser.filter(doc => state.uploadedDocuments[doc.key]).length;
+    const isDocumentsComplete = docsCount === docsForUser.length;
+
+    // Show loading screen during initialization
+    if (state.isInitializing) {
+        return <LoadingScreen message="Initializing PharmaConnect..." />;
+    }
+
+    // Main app tabs
+    const MainAppTabs = () => {
+        if (!state.userRole) return null;
+
         return (
-            <TabNav.Navigator tabBar={props => <BottomNav {...props} hasConversations={hasConversations} userRole={userRole} />}>
-                <TabNav.Screen name="Home" options={{header: () => <Header />}}>
+            <TabNav.Navigator
+                tabBar={props =>
+                    <BottomNav
+                        {...props}
+                        hasConversations={hasConversations}
+                        userRole={state.userRole}
+                    />
+                }
+            >
+                <TabNav.Screen name="Home" options={{ header: () => <Header /> }}>
                     {(props) => {
                         const handleCompleteProfile = () => {
                             props.navigation.navigate(AuthScreen.DocumentUpload, {
                                 title: "Manage Documents",
                                 subText: "Update your documents.",
-                                documentItems: userRole === UserRole.Pharmacist ? PHARMACIST_DOCS : PHARMACY_DOCS,
-                                initialFiles: uploadedDocuments,
-                                onComplete: (docs: UploadedDocuments) => {
-                                    handleDocumentsUploaded(docs);
-                                    // After document upload, pharmacy users should be directed to post a job
-                                    if (userRole === UserRole.Pharmacy) {
-                                        props.navigation.navigate(MainScreen.PostJob);
-                                    } else {
-                                        props.navigation.goBack();
-                                    }
-                                },
+                                documentItems: docsForUser,
+                                initialFiles: state.uploadedDocuments,
+                                onComplete: handleDocumentsUploaded,
                                 mode: 'editing',
                                 onNavigateBack: () => props.navigation.goBack()
                             });
                         };
 
-                        if(userRole === UserRole.Pharmacist) {
-                            return <HomeScreen {...props} userName={userName} documentsUploadedCount={docsCount} isLicenseVerified={isLicenseVerified} jobToReviewId={jobToReviewId} appliedJobsCount={appliedJobIds.size} homeScreenJobs={allJobs.filter(j => j.status === 'Active')} appliedJobIds={appliedJobIds} onCompleteProfileClick={handleCompleteProfile} onVerifyLicense={() => setIsLicenseVerified(true)} onRateJob={handleRateJob} onViewJobDetails={(job) => props.navigation.navigate(MainScreen.JobDetails, { jobId: job.id })} onApply={handleApplyToJob} />
+                        if (state.userRole === UserRole.Pharmacist) {
+                            return (
+                                <HomeScreen
+                                    {...props}
+                                    userName={state.userName}
+                                    documentsUploadedCount={docsCount}
+                                    isLicenseVerified={state.isLicenseVerified}
+                                    jobToReviewId={state.jobToReviewId}
+                                    appliedJobsCount={state.appliedJobIds.size}
+                                    homeScreenJobs={state.allJobs.filter(j => j.status === 'active')}
+                                    appliedJobIds={state.appliedJobIds}
+                                    onCompleteProfileClick={handleCompleteProfile}
+                                    onVerifyLicense={() => dispatch({
+                                        type: 'SET_USER_DATA',
+                                        payload: { isLicenseVerified: true }
+                                    })}
+                                    onRateJob={(jobId, rating) => {
+                                        // Handle rating logic
+                                        const updatedJobs = state.myJobs.map(j =>
+                                            j.id === jobId ? { ...j, rating } : j
+                                        );
+                                        dispatch({
+                                            type: 'UPDATE_JOBS',
+                                            payload: { myJobs: updatedJobs }
+                                        });
+                                        if (state.jobToReviewId === jobId) {
+                                            dispatch({
+                                                type: 'SET_USER_DATA',
+                                                payload: { jobToReviewId: null }
+                                            });
+                                        }
+                                    }}
+                                    onRatePharmacy={async (jobId, rating, feedback) => {
+                                        try {
+                                            await jobsService.ratePharmacy(jobId, rating, feedback);
+
+                                            // Update local state using helper function
+                                            const updatedJobs = updateJobRating(
+                                                state.myJobs,
+                                                jobId,
+                                                'pharmacyRating',
+                                                rating,
+                                                'pharmacyFeedback',
+                                                feedback
+                                            );
+                                            dispatch({
+                                                type: 'UPDATE_JOBS',
+                                                payload: { myJobs: updatedJobs }
+                                            });
+
+                                            if (state.jobToReviewId === jobId) {
+                                                dispatch({
+                                                    type: 'SET_USER_DATA',
+                                                    payload: { jobToReviewId: null }
+                                                });
+                                            }
+
+                                            Alert.alert('Success', 'Thank you for your feedback!');
+                                        } catch (error) {
+                                            handleError(error, 'Failed to submit rating');
+                                        }
+                                    }}
+                                    onViewJobDetails={(job) => props.navigation.navigate(MainScreen.JobDetails, { jobId: job.id })}
+                                    onApply={handleApplyToJob}
+                                />
+                            );
                         }
-                        return <PharmacyHomeScreen
-                            {...props}
-                            userName={userName}
-                            postedJobs={allJobs.filter(job => job.pharmacy === userName)}
-                            onPostNewJob={() => props.navigation.navigate(MainScreen.PostJob)}
-                            onViewApplicants={(jobId) => props.navigation.navigate(MainScreen.ViewApplicants, {jobId})}
-                            onCompleteProfileClick={handleCompleteProfile}
-                            isDocumentsComplete={isDocumentsComplete}
-                            onMarkJobAsCompleted={handleMarkJobAsCompleted}
-                            onRatePharmacist={handleRatePharmacist}
-                        />
+
+                        return (
+                            <PharmacyHomeScreen
+                                {...props}
+                                userName={state.userName}
+                                postedJobs={state.allJobs}
+                                onPostNewJob={() => props.navigation.navigate(MainScreen.PostJob)}
+                                onViewApplicants={(jobId) => props.navigation.navigate(MainScreen.ViewApplicants, { jobId })}
+                                onCompleteProfileClick={handleCompleteProfile}
+                                isDocumentsComplete={isDocumentsComplete}
+                                onMarkJobAsCompleted={async (jobId) => {
+                                    const updatedJobs = updateJobStatus(state.allJobs, jobId, 'completed');
+                                    dispatch({
+                                        type: 'UPDATE_JOBS',
+                                        payload: { allJobs: updatedJobs }
+                                    });
+                                }}
+                                onRatePharmacist={async (jobId, rating, feedback) => {
+                                    const updatedJobs = updateJobRating(
+                                        state.allJobs,
+                                        jobId,
+                                        'pharmacistRating',
+                                        rating,
+                                        'pharmacistFeedback',
+                                        feedback
+                                    );
+                                    dispatch({
+                                        type: 'UPDATE_JOBS',
+                                        payload: { allJobs: updatedJobs }
+                                    });
+                                }}
+                            />
+                        );
                     }}
                 </TabNav.Screen>
-                {userRole === UserRole.Pharmacist && (
-                    <TabNav.Screen name="Explore" options={{header: () => <Header />}}>
-                        {props => <ExploreScreen {...props} isLicenseVerified={isLicenseVerified} jobs={allJobs.filter(j => j.status === 'Active')} appliedJobIds={appliedJobIds} savedJobIds={savedJobIds} onSave={handleSaveJob} onUnsave={handleUnsaveJob} onViewJobDetails={(job) => props.navigation.navigate(MainScreen.JobDetails, { jobId: job.id })} onApply={handleApplyToJob} />}
+
+                {state.userRole === UserRole.Pharmacist && (
+                    <TabNav.Screen name="Explore" options={{ header: () => <Header /> }}>
+                        {props => (
+                            <ExploreScreen
+                                {...props}
+                                isLicenseVerified={state.isLicenseVerified}
+                                jobs={state.allJobs.filter(j => j.status === 'active')}
+                                appliedJobIds={state.appliedJobIds}
+                                savedJobIds={state.savedJobIds}
+                                onSave={handleSaveJob}
+                                onUnsave={handleUnsaveJob}
+                                onViewJobDetails={(job) => props.navigation.navigate(MainScreen.JobDetails, { jobId: job.id })}
+                                onApply={handleApplyToJob}
+                            />
+                        )}
                     </TabNav.Screen>
                 )}
-                <TabNav.Screen name="Messages" options={{header: () => <Header />}}>
+
+                <TabNav.Screen name="Messages" options={{ header: () => <Header /> }}>
                     {props => (
                         <MessagesScreen
                             {...props}
-                            conversations={conversations}
-                            currentUserRole={userRole}
+                            conversations={state.conversations}
+                            currentUserRole={state.userRole}
                             onOpenChat={(id) => props.navigation.navigate(MainScreen.Chat, { conversationId: id })}
                         />
                     )}
                 </TabNav.Screen>
-                {userRole === UserRole.Pharmacist && (
-                    <TabNav.Screen name="MyJobs" options={{header: () => <Header />}}>
-                        {props => <MyJobsScreen {...props} isLicenseVerified={isLicenseVerified} myJobs={myJobs} appliedJobs={allJobs.filter(j => appliedJobIds.has(j.id) && j.status === 'Active')} savedJobs={allJobs.filter(j => savedJobIds.has(j.id))} appliedJobIds={appliedJobIds} onMarkAsCompleted={handleMarkAsCompleted} onApply={handleApplyToJob} onUnsave={handleUnsaveJob} onViewJobDetails={(job) => props.navigation.navigate(MainScreen.JobDetails, { jobId: job.id })} />}
+
+                {state.userRole === UserRole.Pharmacist && (
+                    <TabNav.Screen name="MyJobs" options={{ header: () => <Header /> }}>
+                        {props => (
+                            <MyJobsScreen
+                                {...props}
+                                isLicenseVerified={state.isLicenseVerified}
+                                myJobs={state.myJobs}
+                                appliedJobs={state.allJobs.filter(j => state.appliedJobIds.has(j.id) && j.status === 'active')}
+                                savedJobs={state.allJobs.filter(j => state.savedJobIds.has(j.id))}
+                                appliedJobIds={state.appliedJobIds}
+                                onMarkAsCompleted={(jobId) => {
+                                    const updatedJobs = updateJobStatus(state.myJobs, jobId, 'completed');
+                                    dispatch({
+                                        type: 'UPDATE_JOBS',
+                                        payload: { myJobs: updatedJobs }
+                                    });
+                                    dispatch({
+                                        type: 'SET_USER_DATA',
+                                        payload: { jobToReviewId: jobId }
+                                    });
+                                }}
+                                onRatePharmacy={async (jobId, rating, feedback) => {
+                                    try {
+                                        await jobsService.ratePharmacy(jobId, rating, feedback);
+
+                                        // Update local state using helper function
+                                        const updatedJobs = updateJobRating(
+                                            state.myJobs,
+                                            jobId,
+                                            'pharmacyRating',
+                                            rating,
+                                            'pharmacyFeedback',
+                                            feedback
+                                        );
+                                        dispatch({
+                                            type: 'UPDATE_JOBS',
+                                            payload: { myJobs: updatedJobs }
+                                        });
+
+                                        Alert.alert('Success', 'Thank you for your feedback!');
+                                    } catch (error) {
+                                        handleError(error, 'Failed to submit rating');
+                                    }
+                                }}
+                                onApply={handleApplyToJob}
+                                onUnsave={handleUnsaveJob}
+                                onViewJobDetails={(job) => props.navigation.navigate(MainScreen.JobDetails, { jobId: job.id })}
+                            />
+                        )}
                     </TabNav.Screen>
                 )}
             </TabNav.Navigator>
         );
     };
 
+    // Main app stack
     const MainAppStack = () => (
         <MainStack.Navigator screenOptions={{ headerShown: false, animation: 'slide_from_right' }}>
             <MainStack.Screen name={MainScreen.MainTabs} component={MainAppTabs} />
             <MainStack.Screen name={MainScreen.Profile}>
                 {({ navigation }) => {
-                    // Ensure userRole is not null before rendering
-                    if (!userRole) {
-                        return null;
-                    }
+                    if (!state.userRole) return null;
 
                     return (
                         <ProfileScreen
                             onLogout={handleLogout}
                             onNavigateBack={navigation.goBack}
-                            userName={userName}
-                            userEmail={userEmail}
-                            userPhone={userPhone}
-                            isContactVerified={isContactVerified}
-                            myJobs={myJobs}
-                            userRole={userRole}
-                            pharmacyAddress={pharmacyAddress}
-                            locumsHired={allJobs.filter(j => j.pharmacy === userName && j.status === 'Completed').length}
-                            activeJobsCount={allJobs.filter(j => j.pharmacy === userName && j.status === 'Active').length}
-                            uploadedDocuments={uploadedDocuments}
+                            userName={state.userName}
+                            userEmail={state.userEmail}
+                            userPhone={state.userPhone}
+                            isContactVerified={state.isContactVerified}
+                            myJobs={state.myJobs}
+                            userRole={state.userRole}
+                            pharmacyAddress={state.pharmacyAddress}
+                            locumsHired={state.allJobs.filter(j => j.pharmacy === state.userName && j.status === 'completed').length}
+                            activeJobsCount={state.allJobs.filter(j => j.pharmacy === state.userName && j.status === 'active').length}
+                            uploadedDocuments={state.uploadedDocuments}
                             onEditDocuments={() => navigation.navigate(AuthScreen.DocumentUpload, {
                                 title: "Manage Documents",
                                 subText: "Update your documents.",
-                                documentItems: userRole === UserRole.Pharmacist ? PHARMACIST_DOCS : PHARMACY_DOCS,
-                                initialFiles: uploadedDocuments,
-                                onComplete: (docs: UploadedDocuments) => {
-                                    handleDocumentsUploaded(docs);
-                                    navigation.goBack();
-                                },
+                                documentItems: docsForUser,
+                                initialFiles: state.uploadedDocuments,
+                                onComplete: handleDocumentsUploaded,
                                 mode: 'editing',
                                 onNavigateBack: () => navigation.goBack()
                             })}
@@ -431,122 +988,261 @@ function AppContent() {
                     );
                 }}
             </MainStack.Screen>
+
             <MainStack.Screen name={MainScreen.JobDetails}>
                 {({ route, navigation }) => {
-                    const job = allJobs.find(j => j.id === route.params.jobId);
+                    const job = state.allJobs.find(j => j.id === route.params.jobId);
                     if (!job) return null;
-                    return <JobDetailsScreen job={job} onNavigateBack={navigation.goBack} isLicenseVerified={isLicenseVerified} hasApplied={appliedJobIds.has(job.id)} isSaved={savedJobIds.has(job.id)} onApply={handleApplyToJob} onSave={handleSaveJob} onUnsave={handleUnsaveJob}/>
+                    return (
+                        <JobDetailsScreen
+                            job={job}
+                            onNavigateBack={navigation.goBack}
+                            isLicenseVerified={state.isLicenseVerified}
+                            hasApplied={state.appliedJobIds.has(job.id)}
+                            isSaved={state.savedJobIds.has(job.id)}
+                            onApply={handleApplyToJob}
+                            onSave={handleSaveJob}
+                            onUnsave={handleUnsaveJob}
+                        />
+                    );
                 }}
             </MainStack.Screen>
-            <AuthStack.Screen name={AuthScreen.DocumentUpload}>
+
+            <MainStack.Screen name={AuthScreen.DocumentUpload}>
                 {({ navigation, route }) => {
                     if (!route.params) return null;
-                    return <DocumentUploadScreen
-                        route={{
-                            ...route,
-                            params: {
-                                ...route.params,
-                                onComplete: route.params.onComplete,
-                                onNavigateBack: route.params.onNavigateBack || (() => navigation.goBack())
-                            }
-                        }}
-                        navigation={navigation}
-                    />
+                    return (
+                        <DocumentUploadScreen
+                            route={{
+                                ...route,
+                                params: {
+                                    ...route.params,
+                                    onComplete: route.params.onComplete,
+                                    onNavigateBack: route.params.onNavigateBack || (() => navigation.goBack())
+                                }
+                            }}
+                            navigation={navigation}
+                        />
+                    );
                 }}
-            </AuthStack.Screen>
-            <MainStack.Screen name={MainScreen.PostJob}>
-                {({ navigation }) => <PostJobScreen onJobPosted={(data) => { handleJobPosted(data); navigation.goBack(); }} onNavigateBack={navigation.goBack} />}
             </MainStack.Screen>
+
+            <MainStack.Screen name={MainScreen.PostJob}>
+                {({ navigation }) => (
+                    <PostJobScreen
+                        onJobPosted={(data) => {
+                            handleJobPosted(data);
+                            navigation.goBack();
+                        }}
+                        onNavigateBack={navigation.goBack}
+                    />
+                )}
+            </MainStack.Screen>
+
             <MainStack.Screen name={MainScreen.ViewApplicants}>
                 {({ route, navigation }) => {
-                    const job = allJobs.find(j => j.id === route.params.jobId);
+                    const job = state.allJobs.find(j => j.id === route.params.jobId);
                     if (!job) return null;
-                    console.log('ViewApplicants rendered for job:', job.id, 'with applicants:', job.applicants?.length);
-                    return <ViewApplicantsScreen
-                        job={job}
-                        onNavigateBack={navigation.goBack}
-                        onViewProfile={(applicant) => {
-                            console.log('Navigating to ApplicantProfile for:', applicant.name);
-                            navigation.navigate(MainScreen.ApplicantProfile, { applicant, jobId: job.id });
-                        }}
-                        onSaveApplicant={handleSaveApplicant}
-                    />
+
+                    return (
+                        <ViewApplicantsScreen
+                            job={job}
+                            onNavigateBack={navigation.goBack}
+                            onViewProfile={(applicant) => {
+                                navigation.navigate(MainScreen.ApplicantProfile, {
+                                    applicant,
+                                    jobId: job.id
+                                });
+                            }}
+                            onSaveApplicant={async (jobId, applicant) => {
+                                try {
+                                    await jobsService.saveApplicant(jobId, applicant.id);
+
+                                    // Update local state
+                                    const updatedJobs = state.allJobs.map(job => {
+                                        if (job.id === jobId) {
+                                            const savedApplicants = job.savedApplicants || [];
+                                            if (!savedApplicants.find(saved => saved.id === applicant.id)) {
+                                                return {
+                                                    ...job,
+                                                    savedApplicants: [...savedApplicants, applicant],
+                                                    applicants: job.applicants?.filter(a => a.id !== applicant.id)
+                                                };
+                                            }
+                                        }
+                                        return job;
+                                    });
+
+                                    dispatch({
+                                        type: 'UPDATE_JOBS',
+                                        payload: { allJobs: updatedJobs }
+                                    });
+
+                                    Alert.alert('Success', 'Applicant saved for later');
+                                } catch (error) {
+                                    handleError(error, 'Failed to save applicant');
+                                }
+                            }}
+                        />
+                    );
                 }}
             </MainStack.Screen>
+
             <MainStack.Screen name={MainScreen.ApplicantProfile}>
-                {({ route, navigation }) => {
-                    console.log('ApplicantProfile route params:', route.params);
-                    return <ApplicantProfileScreen
+                {({ route, navigation }) => (
+                    <ApplicantProfileScreen
                         applicant={route.params.applicant}
                         onNavigateBack={navigation.goBack}
-                        onConfirm={() => {
-                            handleConfirmApplicant(route.params.jobId, route.params.applicant);
-                            navigation.navigate(MainScreen.Chat, { conversationId: route.params.jobId })
+                        onConfirm={async () => {
+                            try {
+                                await jobsService.confirmApplicant(route.params.jobId, route.params.applicant.id);
+
+                                // Update local state using helper function
+                                const updatedJobs = state.allJobs.map(job =>
+                                    job.id === route.params.jobId
+                                        ? {
+                                            ...job,
+                                            status: 'confirmed' as JobStatus,
+                                            confirmedApplicant: route.params.applicant
+                                        }
+                                        : job
+                                );
+
+                                dispatch({
+                                    type: 'UPDATE_JOBS',
+                                    payload: { allJobs: updatedJobs }
+                                });
+
+                                // Create conversation
+                                const newConvo: Conversation = {
+                                    id: route.params.jobId,
+                                    pharmacyName: state.userName,
+                                    pharmacistName: route.params.applicant.name,
+                                    jobRole: state.allJobs.find(j => j.id === route.params.jobId)?.role || '',
+                                    messages: []
+                                };
+
+                                dispatch({
+                                    type: 'SET_CONVERSATIONS',
+                                    payload: [...state.conversations, newConvo]
+                                });
+
+                                Alert.alert('Success', `${route.params.applicant.name} has been confirmed for this job.`);
+                                navigation.navigate(MainScreen.Chat, { conversationId: route.params.jobId });
+                            } catch (error) {
+                                handleError(error, 'Failed to confirm applicant');
+                            }
                         }}
-                        onDecline={() => {
-                            handleDeclineApplicant(route.params.jobId, route.params.applicant.id);
-                            navigation.goBack();
+                        onDecline={async () => {
+                            try {
+                                await jobsService.declineApplicant(route.params.jobId, route.params.applicant.id);
+
+                                // Update local state
+                                const updatedJobs = state.allJobs.map(job =>
+                                    job.id === route.params.jobId
+                                        ? {
+                                            ...job,
+                                            applicants: job.applicants?.filter(a => a.id !== route.params.applicant.id)
+                                        }
+                                        : job
+                                );
+
+                                dispatch({
+                                    type: 'UPDATE_JOBS',
+                                    payload: { allJobs: updatedJobs }
+                                });
+
+                                Alert.alert('Success', 'Applicant declined');
+                                navigation.goBack();
+                            } catch (error) {
+                                handleError(error, 'Failed to decline applicant');
+                            }
                         }}
-                        onSave={() => {
-                            handleSaveApplicant(route.params.jobId, route.params.applicant);
-                            navigation.goBack();
+                        onSave={async () => {
+                            try {
+                                await jobsService.saveApplicant(route.params.jobId, route.params.applicant.id);
+
+                                // Update local state (same logic as in ViewApplicants)
+                                const updatedJobs = state.allJobs.map(job => {
+                                    if (job.id === route.params.jobId) {
+                                        const savedApplicants = job.savedApplicants || [];
+                                        if (!savedApplicants.find(saved => saved.id === route.params.applicant.id)) {
+                                            return {
+                                                ...job,
+                                                savedApplicants: [...savedApplicants, route.params.applicant],
+                                                applicants: job.applicants?.filter(a => a.id !== route.params.applicant.id)
+                                            };
+                                        }
+                                    }
+                                    return job;
+                                });
+
+                                dispatch({
+                                    type: 'UPDATE_JOBS',
+                                    payload: { allJobs: updatedJobs }
+                                });
+
+                                Alert.alert('Success', 'Applicant saved for later');
+                                navigation.goBack();
+                            } catch (error) {
+                                handleError(error, 'Failed to save applicant');
+                            }
                         }}
                     />
-                }}
+                )}
             </MainStack.Screen>
+
             <MainStack.Screen name={MainScreen.Chat}>
                 {({ route, navigation }) => {
-                    // Ensure userRole is not null before rendering
-                    if (!userRole) {
-                        return null;
-                    }
+                    if (!state.userRole) return null;
 
-                    const conversation = conversations.find(c => c.id === route.params.conversationId);
+                    const conversation = state.conversations.find(c => c.id === route.params.conversationId);
                     if (!conversation) return null;
-                    return <ChatScreen conversation={conversation} onSendMessage={(text) => handleSendMessage(route.params.conversationId, text)} onNavigateBack={navigation.goBack} currentUserRole={userRole} />
+
+                    return (
+                        <ChatScreen
+                            conversation={conversation}
+                            onSendMessage={(text) => handleSendMessage(route.params.conversationId, text)}
+                            onNavigateBack={navigation.goBack}
+                            currentUserRole={state.userRole}
+                        />
+                    );
                 }}
             </MainStack.Screen>
         </MainStack.Navigator>
     );
 
+    // Authentication flow stack
     const AuthFlowStack = () => (
         <AuthStack.Navigator screenOptions={{ headerShown: false, animation: 'slide_from_right' }}>
             <AuthStack.Screen name={AuthScreen.Welcome} component={WelcomeScreen} />
-            <AuthStack.Screen name={AuthScreen.Login} >
-                {({ navigation }) => <LoginScreen
-                    onLogin={handleLogin}
-                    onNavigateToSignUp={() => navigation.navigate(AuthScreen.Signup)}
-                    onNavigateBack={() => navigation.goBack()}
-                />}
+
+            <AuthStack.Screen name={AuthScreen.Login}>
+                {({ navigation }) => (
+                    <LoginScreen
+                        onLogin={handleLogin}
+                        onNavigateToSignUp={() => navigation.navigate(AuthScreen.Signup)}
+                        onNavigateBack={() => navigation.goBack()}
+                    />
+                )}
             </AuthStack.Screen>
+
             <AuthStack.Screen name={AuthScreen.RoleSelection} component={RoleSelectionScreen} />
+
             <AuthStack.Screen name={AuthScreen.Signup}>
                 {({ navigation, route }) => {
                     const role = route.params?.role;
                     if (!role) {
-                        // Handle the case where role is undefined
                         navigation.navigate(AuthScreen.RoleSelection);
                         return null;
                     }
                     return (
                         <SignupScreen
-                            onSignup={(roleParam, name, email) => {
-                                setUserRole(roleParam);
-                                setUserName(name);
-                                setUserEmail(email);
+                            onSignup={async (roleParam, name, email, password) => {
+                                await handleSignup(roleParam, name, email, password);
 
-                                // Create new user entry in mock data if it doesn't exist
-                                if (!mockUserData[email]) {
-                                    mockUserData[email] = {
-                                        documents: initialUploadedDocs,
-                                        isLicenseVerified: false,
-                                        isContactVerified: false,
-                                        isPremium: false
-                                    };
-                                }
-
-                                // Skip document upload during signup - go directly to contact info or verification
-                                if(roleParam === UserRole.Pharmacy) {
+                                // Navigate to appropriate next step
+                                if (roleParam === UserRole.Pharmacy) {
                                     navigation.navigate(AuthScreen.Verification, {
                                         method: VerificationMethod.Email,
                                         email,
@@ -564,84 +1260,141 @@ function AppContent() {
                     );
                 }}
             </AuthStack.Screen>
+
             <AuthStack.Screen name={AuthScreen.DocumentUpload}>
                 {({ navigation, route }) => {
                     if (!route.params) return null;
-                    return <DocumentUploadScreen
-                        route={{
-                            ...route,
-                            params: {
-                                ...route.params,
-                                onNavigateBack: route.params.onNavigateBack || (() => navigation.goBack())
-                            }
-                        }}
-                        navigation={navigation}
-                    />
+                    return (
+                        <DocumentUploadScreen
+                            route={{
+                                ...route,
+                                params: {
+                                    ...route.params,
+                                    onNavigateBack: route.params.onNavigateBack || (() => navigation.goBack())
+                                }
+                            }}
+                            navigation={navigation}
+                        />
+                    );
                 }}
             </AuthStack.Screen>
+
             <AuthStack.Screen name={AuthScreen.ContactInfo}>
-                {({ navigation }) => <ContactInfoScreen
-                    onComplete={(phone, email, method) => {
-                        setUserPhone(phone);
-                        setUserEmail(email);
-                        navigation.navigate(AuthScreen.Verification, {
-                            method,
-                            email,
-                            phone,
-                            title: method === VerificationMethod.Email ? 'Verify Your Email' : 'Verify Your Phone'
-                        });
-                    }}
-                    email={userEmail}
-                    onNavigateBack={navigation.goBack}
-                />}
+                {({ navigation }) => (
+                    <ContactInfoScreen
+                        onComplete={async (phone, email, method) => {
+                            await handleContactInfoComplete(phone, email, method);
+                            navigation.navigate(AuthScreen.Verification, {
+                                method,
+                                email,
+                                phone,
+                                title: method === VerificationMethod.Email ? 'Verify Your Email' : 'Verify Your Phone'
+                            });
+                        }}
+                        email={state.userEmail}
+                        onNavigateBack={navigation.goBack}
+                    />
+                )}
             </AuthStack.Screen>
+
             <AuthStack.Screen name={AuthScreen.Verification}>
-                {({ navigation, route }) => <VerificationScreen
-                    onVerify={() => {
-                        setIsContactVerified(true);
+                {({ navigation, route }) => (
+                    <VerificationScreen
+                        onVerify={async () => {
+                            await handleVerifyOTP('1234', route.params.method); // Mock OTP for demo
 
-                        // Update mock user data
-                        if (userEmail && mockUserData[userEmail]) {
-                            mockUserData[userEmail].isContactVerified = true;
-                        }
-
-                        if(userRole === UserRole.Pharmacist) {
-                            setIsAuthenticated(true);
-                        } else {
-                            navigation.navigate(AuthScreen.AddressInfo);
-                        }
-                    }}
-                    onNavigateBack={navigation.goBack}
-                    method={route.params.method}
-                    email={route.params.email}
-                    phone={route.params.phone}
-                    title={route.params.title}
-                />}
+                            if (state.userRole === UserRole.Pharmacist) {
+                                dispatch({ type: 'SET_AUTHENTICATED', payload: true });
+                            } else {
+                                navigation.navigate(AuthScreen.AddressInfo);
+                            }
+                        }}
+                        onNavigateBack={navigation.goBack}
+                        method={route.params.method}
+                        email={route.params.email}
+                        phone={route.params.phone}
+                        title={route.params.title}
+                    />
+                )}
             </AuthStack.Screen>
+
             <AuthStack.Screen name={AuthScreen.AddressInfo}>
-                {({ navigation }) => <AddressInfoScreen
-                    onComplete={(address) => {
-                        setPharmacyAddress(address);
-                        setIsAuthenticated(true);
-                    }}
-                    onNavigateBack={navigation.goBack}
-                />}
+                {({ navigation }) => (
+                    <AddressInfoScreen
+                        onComplete={async (address) => {
+                            await handleAddressComplete(address);
+                            dispatch({ type: 'SET_AUTHENTICATED', payload: true });
+                        }}
+                        onNavigateBack={navigation.goBack}
+                    />
+                )}
             </AuthStack.Screen>
         </AuthStack.Navigator>
     );
 
+    // Error display
+    if (state.error) {
+        return (
+            <View style={styles.errorContainer}>
+                <Text style={styles.errorText}>{state.error}</Text>
+                {state.isOffline && (
+                    <TouchableOpacity
+                        style={styles.retryButton}
+                        onPress={() => {
+                            dispatch({ type: 'SET_ERROR', payload: null });
+                            dispatch({ type: 'SET_OFFLINE', payload: false });
+                            refreshUserData();
+                        }}
+                    >
+                        <Text style={styles.retryButtonText}>Retry</Text>
+                    </TouchableOpacity>
+                )}
+            </View>
+        );
+    }
+
     return (
         <NavigationContainer>
-            {isAuthenticated ? <MainAppStack /> : <AuthFlowStack />}
+            {state.isAuthenticated ? <MainAppStack /> : <AuthFlowStack />}
+            {state.isLoading && <LoadingScreen message="Loading..." />}
         </NavigationContainer>
     );
 }
 
+const styles = StyleSheet.create({
+    errorContainer: {
+        flex: 1,
+        justifyContent: 'center',
+        alignItems: 'center',
+        padding: 20,
+        backgroundColor: '#F9FAFB',
+    },
+    errorText: {
+        fontSize: 16,
+        color: '#EF4444',
+        textAlign: 'center',
+        marginBottom: 20,
+    },
+    retryButton: {
+        backgroundColor: '#2563EB',
+        paddingHorizontal: 24,
+        paddingVertical: 12,
+        borderRadius: 8,
+    },
+    retryButtonText: {
+        color: '#FFFFFF',
+        fontSize: 16,
+        fontWeight: 'bold',
+    },
+});
+
 export default function App() {
     return (
-        <>
-            <StatusBar style="dark" />
-            <AppContent />
-        </>
+        <ErrorBoundary>
+            <SafeAreaProvider>
+                <StatusBar style="dark" />
+                <AppContent />
+            </SafeAreaProvider>
+        </ErrorBoundary>
     );
 }
