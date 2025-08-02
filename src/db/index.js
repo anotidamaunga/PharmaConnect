@@ -1,6 +1,9 @@
 const { Pool } = require('pg');
 const logger = require('../utils/logger');
 
+console.log('DATABASE_URL from env:', process.env.DATABASE_URL);
+console.log('DB_SSL from env:', process.env.DB_SSL);
+
 const pool = new Pool({
     connectionString: process.env.DATABASE_URL,
     ssl: process.env.DB_SSL === 'true' ? { rejectUnauthorized: false } : false,
@@ -8,6 +11,7 @@ const pool = new Pool({
     idleTimeoutMillis: 30000,
     connectionTimeoutMillis: 2000,
 });
+
 
 // Test database connection
 pool.on('connect', () => {

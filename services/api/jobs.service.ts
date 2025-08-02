@@ -1,5 +1,5 @@
 import { apiClient } from './client';
-import { Job, FacilityType, ShiftType } from '../../types';
+import {Job, FacilityType, ShiftType, PharmacistRatings, PharmacyRatings} from '../../types';
 
 interface JobSearchParams {
     location?: string;
@@ -62,6 +62,22 @@ export const jobsService = {
     async completeJob(jobId: string): Promise<void> {
         await apiClient.post(`/jobs/${jobId}/complete`);
     },
+    async getMyJobs(): Promise<Job[]> {
+        return apiClient.get('/jobs/my-jobs');
+    },
+
+    async getPharmacyJobs(): Promise<Job[]> {
+        return apiClient.get('/jobs/pharmacy-jobs');
+    },
+
+    async saveApplicant(jobId: string, applicantId: string): Promise<void> {
+        await apiClient.post(`/jobs/${jobId}/applicants/${applicantId}/save`);
+    },
+
+    async declineApplicant(jobId: string, applicantId: string): Promise<void> {
+        await apiClient.post(`/jobs/${jobId}/applicants/${applicantId}/decline`);
+    },
+
 
     async rateJob(
         jobId: string,
@@ -70,4 +86,30 @@ export const jobsService = {
     ): Promise<void> {
         await apiClient.post(`/jobs/${jobId}/rate`, { rating, feedback });
     },
+
+    async ratePharmacist(
+        jobId: string,
+        rating: number,
+        feedback?: string
+    ): Promise<void> {
+        await apiClient.post(`/jobs/${jobId}/rate-pharmacist`, { rating, feedback });
+    },
+
+    async ratePharmacy(
+        jobId: string,
+        rating: number,
+        feedback?: string
+    ): Promise<void> {
+        await apiClient.post(`/jobs/${jobId}/rate-pharmacy`, { rating, feedback });
+    },
+
+// Get ratings for pharmacists/pharmacies
+    async getPharmacistRatings(pharmacistId: string): Promise<PharmacistRatings> {
+        return apiClient.get(`/pharmacists/${pharmacistId}/ratings`);
+    },
+
+    async getPharmacyRatings(pharmacyId: string): Promise<PharmacyRatings> {
+        return apiClient.get(`/pharmacies/${pharmacyId}/ratings`);
+    },
+
 };

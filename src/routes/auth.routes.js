@@ -5,7 +5,7 @@ const Joi = require('joi');
 const db = require('../db');
 const { sendEmail } = require('../services/email.service');
 const { sendSMS } = require('../services/sms.service');
-const { authenticate } = require('../middleware/auth');
+const { authenticate } = require('../middleware/middleware');
 
 const router = express.Router();
 
@@ -100,14 +100,17 @@ router.post('/signup', async (req, res) => {
 });
 
 // Login
+// Login
 router.post('/login', async (req, res) => {
     try {
         const { email, password } = req.body;
 
-        // Authenticate user
+        console.log('Login attempt:', { email }); // Debug log
+
+        // Get user directly (not using the function)
         const { rows } = await db.query(
-            'SELECT * FROM authenticate_user($1, $2)',
-            [email, password]
+            'SELECT * FROM users WHERE email = $1 AND is_active = true',
+            [email]
         );
 
         if (rows.length === 0) {
@@ -115,41 +118,50 @@ router.post('/login', async (req, res) => {
         }
 
         const user = rows[0];
+        console.log('Found user:', { id: user.id, email: user.email, role: user.role }); // Debug log
+
+        // Check password
+        const isMatch = await bcrypt.compare(password, user.password_hash);
+        if (!isMatch) {
+            return res.status(401).json({ error: 'Invalid email or password' });
+        }
 
         // Get profile data
         let profile;
         if (user.role === 'pharmacist') {
             const profileResult = await db.query(
                 'SELECT * FROM pharmacists WHERE id = $1',
-                [user.user_id]
+                [user.id]
             );
             profile = profileResult.rows[0];
         } else if (user.role === 'pharmacy') {
             const profileResult = await db.query(
                 'SELECT * FROM pharmacies WHERE id = $1',
-                [user.user_id]
+                [user.id]
             );
             profile = profileResult.rows[0];
         }
 
         // Generate tokens
         const accessToken = jwt.sign(
-            { userId: user.user_id, role: user.role, email },
+            { userId: user.id, role: user.role, email },
             process.env.JWT_SECRET,
             { expiresIn: process.env.JWT_EXPIRES_IN }
         );
 
         const refreshToken = jwt.sign(
-            { userId: user.user_id },
+            { userId: user.id },
             process.env.JWT_REFRESH_SECRET,
             { expiresIn: process.env.JWT_REFRESH_EXPIRES_IN }
         );
+
+        console.log('Login successful for:', email); // Debug log
 
         res.json({
             accessToken,
             refreshToken,
             user: {
-                id: user.user_id,
+                id: user.id,
                 email,
                 role: user.role,
                 isEmailVerified: user.is_email_verified,

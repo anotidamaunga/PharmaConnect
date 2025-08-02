@@ -1,7 +1,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 const API_BASE_URL = __DEV__
-    ? 'http://localhost:3000/api'
+    ? 'http://192.168.178.32:3000/api'
     : 'https://api.pharmaconnect.com/api';
 
 export const API_CONFIG = {

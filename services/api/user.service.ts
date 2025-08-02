@@ -1,4 +1,5 @@
 import { apiClient } from './client';
+import {DashboardStats} from "../../types";
 
 export const userService = {
     async getProfile(): Promise<any> {
@@ -22,5 +23,8 @@ export const userService = {
 
     async getDashboardStats(): Promise<any> {
         return apiClient.get('/users/stats');
+    },
+    async getDashboardStats(): Promise<DashboardStats> {
+        return apiClient.get('/users/dashboard-stats');
     },
 };
