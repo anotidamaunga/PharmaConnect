@@ -1,5 +1,6 @@
 import type { NavigationProp } from '@react-navigation/native';
 import type { NativeStackScreenProps, NativeStackNavigationProp } from '@react-navigation/native-stack';
+import React from "react";
 
 // ======================================================================
 // ========= ENUMS ======================================================
@@ -71,6 +72,8 @@ export interface DocumentItemConfig {
 export interface UploadedFile {
     uri: string;
     name: string;
+    type?: string;
+    size?: number;
 }
 
 export type UploadedDocuments = Record<DocumentKey, UploadedFile | null>;
@@ -95,13 +98,23 @@ export interface Job {
     facilityType: FacilityType;
     shiftType: ShiftType;
     description: string;
-    status?: 'Completed' | 'Confirmed' | 'Pending' | 'Cancelled' | 'Active' | 'Closed';
-    rating?: number;
+    status: JobStatus; // Changed from: status?: 'completed' | 'confirmed' | 'pending' | 'cancelled' | 'active' | 'closed';
+    rating?: number; // Legacy field - pharmacist's rating of the job/pharmacy
     applicants?: Applicant[];
-    savedApplicants?: Applicant[]; // New: Applicants saved for later consideration
+    savedApplicants?: Applicant[];
     confirmedApplicant?: Applicant;
-    pharmacistRating?: number; // New: Rating given to the pharmacist after job completion
-    pharmacistFeedback?: string; // New: Feedback provided about the pharmacist's performance
+
+    // Two-way rating system
+    pharmacistRating?: number;        // Pharmacy's rating of the pharmacist (1-5)
+    pharmacistFeedback?: string;      // Pharmacy's feedback about the pharmacist
+    pharmacyRating?: number;          // Pharmacist's rating of the pharmacy (1-5)
+    pharmacyFeedback?: string;        // Pharmacist's feedback about the pharmacy
+
+    // Additional properties needed by API
+    hasApplied?: boolean;
+    isSaved?: boolean;
+    location_address?: string;
+    location_city?: string;
 }
 
 export interface Message {
@@ -120,12 +133,92 @@ export interface Conversation {
 }
 
 // ======================================================================
+// ========= API INTERFACES ==============================================
+// ======================================================================
+
+export interface ApiResponse<T = any> {
+    data: T;
+    message?: string;
+    success: boolean;
+}
+
+export interface LoginResponse {
+    accessToken: string;
+    refreshToken: string;
+    user: {
+        id: string;
+        email: string;
+        role: UserRole;
+        isEmailVerified: boolean;
+        isPhoneVerified: boolean;
+        profile: any;
+    };
+}
+
+export interface SignupData {
+    email: string;
+    password: string;
+    role: UserRole;
+    firstName?: string;
+    lastName?: string;
+    pharmacyName?: string;
+    phone: string;
+}
+
+export interface JobSearchParams {
+    location?: string;
+    minRate?: number;
+    facilityTypes?: FacilityType[];
+    shiftTypes?: ShiftType[];
+    dateFrom?: string;
+    dateTo?: string;
+    page?: number;
+    limit?: number;
+}
+
+export interface JobSearchResponse {
+    jobs: Job[];
+    page: number;
+    limit: number;
+    hasMore: boolean;
+}
+
+export interface UserProfile {
+    id: string;
+    email: string;
+    role: UserRole;
+    firstName?: string;
+    lastName?: string;
+    pharmacyName?: string;
+    phone: string;
+    address?: string;
+    isPremium?: boolean;
+    licenseVerificationStatus?: 'pending' | 'verified' | 'rejected';
+    isEmailVerified: boolean;
+    isPhoneVerified: boolean;
+}
+
+export interface DocumentUploadResponse {
+    id: string;
+    documentType: DocumentKey;
+    fileName: string;
+    fileUrl: string;
+    status: 'pending' | 'approved' | 'rejected';
+    uploadedAt: string;
+}
+
+export interface DashboardStats {
+    activeJobs: number;
+    totalApplications: number;
+    completedJobs: number;
+    averageRating?: number;
+    totalEarnings?: number;
+}
+
+// ======================================================================
 // ========= NAVIGATION PARAMETER TYPES =================================
 // ======================================================================
 
-/**
- * Parameters for the DocumentUploadScreen
- */
 export interface DocumentUploadParams {
     title: string;
     subText: string;
@@ -136,16 +229,10 @@ export interface DocumentUploadParams {
     mode: 'onboarding' | 'editing';
 }
 
-/**
- * Parameters for the SignupScreen
- */
 export interface SignupParams {
     role?: UserRole;
 }
 
-/**
- * Parameters for the VerificationScreen
- */
 export interface VerificationParams {
     method: VerificationMethod;
     email: string;
@@ -153,31 +240,19 @@ export interface VerificationParams {
     title: string;
 }
 
-/**
- * Parameters for the ViewApplicantsScreen
- */
 export interface ViewApplicantsParams {
     jobId: string;
 }
 
-/**
- * Parameters for the ChatScreen
- */
 export interface ChatParams {
     conversationId: string;
 }
 
-/**
- * Parameters for the ApplicantProfileScreen
- */
 export interface ApplicantProfileParams {
     applicant: Applicant;
     jobId: string;
 }
 
-/**
- * Parameters for the JobDetailsScreen
- */
 export interface JobDetailsParams {
     jobId: string;
 }
@@ -186,10 +261,6 @@ export interface JobDetailsParams {
 // ========= CONSOLIDATED NAVIGATION TYPES ==============================
 // ======================================================================
 
-/**
- * Complete navigation parameter list for the entire application.
- * This is the single source of truth for all screen parameters.
- */
 export type AppStackParamList = {
     // Authentication Flow Screens
     [AuthScreen.Welcome]: undefined;
@@ -211,60 +282,30 @@ export type AppStackParamList = {
     [MainScreen.JobDetails]: JobDetailsParams;
 };
 
-/**
- * Main navigation prop for the entire application stack.
- * Use this with useNavigation hook for type-safe navigation.
- *
- * @example
- * ```typescript
- * const navigation = useNavigation<AppNavigationProp>();
- * navigation.navigate(AuthScreen.Login);
- * ```
- */
 export type AppNavigationProp = NativeStackNavigationProp<AppStackParamList>;
 
-/**
- * Generic type for screen component props (route and navigation).
- * Use this to type your screen components for full type safety.
- *
- * @example
- * ```typescript
- * const MyScreen: React.FC<AppScreenProps<AuthScreen.Login>> = ({ route, navigation }) => {
- *   // route and navigation are fully typed
- *   return <View>...</View>;
- * };
- * ```
- */
 export type AppScreenProps<T extends keyof AppStackParamList> = NativeStackScreenProps<AppStackParamList, T>;
 
 // ======================================================================
 // ========= SCREEN PROP INTERFACES =====================================
 // ======================================================================
 
-/**
- * Props for LoginScreen component
- */
 export interface LoginScreenProps {
-    onLogin: (role: UserRole) => void;
+    onLogin: (role: UserRole) => Promise<void>; // Make async
     onNavigateToSignUp: () => void;
     onNavigateBack: () => void;
 }
 
-/**
- * Props for SignupScreen component
- */
+
 export interface SignupScreenProps {
-    onSignup: (role: UserRole, name: string, email: string) => void;
+    onSignup: (role: UserRole, name: string, email: string, password: string) => Promise<void>;
     onNavigateBack: () => void;
     onNavigateToLogin: () => void;
     role?: UserRole;
 }
 
-/**
- * Props for VerificationScreen component
- */
 export interface VerificationScreenProps {
-    onVerify: () => void;
+    onVerify: () => Promise<void>; // Make async
     onNavigateBack: () => void;
     method: VerificationMethod;
     email: string;
@@ -272,9 +313,6 @@ export interface VerificationScreenProps {
     title: string;
 }
 
-/**
- * Props for DocumentUploadScreen component
- */
 export interface DocumentUploadScreenProps {
     route: {
         params: DocumentUploadParams;
@@ -282,51 +320,33 @@ export interface DocumentUploadScreenProps {
     navigation: AppNavigationProp;
 }
 
-/**
- * Props for ContactInfoScreen component
- */
 export interface ContactInfoScreenProps {
-    onComplete: (phone: string, email: string, method: VerificationMethod) => void;
+    onComplete: (phone: string, email: string, method: VerificationMethod) => Promise<void>; // Make async
     onNavigateBack: () => void;
     email: string;
 }
 
-/**
- * Props for AddressInfoScreen component
- */
 export interface AddressInfoScreenProps {
-    onComplete: (address: string) => void;
+    onComplete: (address: string) => Promise<void>; // Make async
     onNavigateBack: () => void;
 }
 
-// ======================================================================
-// ========= NEW COMPONENT PROP INTERFACES ==============================
-// ======================================================================
 
-/**
- * Props for ViewApplicantsScreen component
- */
 export interface ViewApplicantsScreenProps {
     job: Job;
     onNavigateBack: () => void;
     onViewProfile: (applicant: Applicant) => void;
-    onSaveApplicant?: (jobId: string, applicant: Applicant) => void;
+    onSaveApplicant?: (jobId: string, applicant: Applicant) => Promise<void>;
 }
 
-/**
- * Props for ApplicantProfileScreen component
- */
 export interface ApplicantProfileScreenProps {
     applicant: Applicant;
     onNavigateBack: () => void;
-    onConfirm: () => void;
-    onDecline: () => void;
-    onSave?: () => void;
+    onConfirm: () => Promise<void>;
+    onDecline: () => Promise<void>;
+    onSave?: () => Promise<void>;
 }
 
-/**
- * Props for PharmacyHomeScreen component
- */
 export interface PharmacyHomeScreenProps {
     userName: string;
     postedJobs: Job[];
@@ -338,20 +358,99 @@ export interface PharmacyHomeScreenProps {
     onRatePharmacist?: (jobId: string, rating: number, feedback?: string) => void;
 }
 
+export interface HomeScreenProps {
+    userName: string;
+    documentsUploadedCount: number;
+    isLicenseVerified: boolean;
+    jobToReviewId: string | null;
+    appliedJobsCount: number;
+    homeScreenJobs: Job[];
+    appliedJobIds: Set<string>;
+    onCompleteProfileClick: () => void;
+    onVerifyLicense: () => void;
+    onRateJob: (jobId: string, rating: number) => void;
+    onRatePharmacy: (jobId: string, rating: number, feedback?: string) => void;
+    onViewJobDetails: (job: Job) => void;
+    onApply: (jobId: string) => void;
+}
+
+export interface ExploreScreenProps {
+    isLicenseVerified: boolean;
+    jobs: Job[];
+    appliedJobIds: Set<string>;
+    savedJobIds: Set<string>;
+    onSave: (jobId: string) => void;
+    onUnsave: (jobId: string) => void;
+    onViewJobDetails: (job: Job) => void;
+    onApply: (jobId: string) => void;
+}
+
+export interface MyJobsScreenProps {
+    isLicenseVerified: boolean;
+    myJobs: Job[];
+    appliedJobs: Job[];
+    savedJobs: Job[];
+    appliedJobIds: Set<string>;
+    onMarkAsCompleted: (jobId: string) => void;
+    onRatePharmacy: (jobId: string, rating: number, feedback?: string) => void;
+    onApply: (jobId: string) => void;
+    onUnsave: (jobId: string) => void;
+    onViewJobDetails: (job: Job) => void;
+}
+
+export interface MessagesScreenProps {
+    conversations: Conversation[];
+    onOpenChat: (conversationId: string) => void;
+    currentUserRole: UserRole;
+}
+
+export interface ChatScreenProps {
+    conversation: Conversation;
+    onSendMessage: (text: string) => void;
+    onNavigateBack: () => void;
+    currentUserRole: UserRole;
+}
+
+export interface JobDetailsScreenProps {
+    job: Job;
+    onNavigateBack: () => void;
+    isLicenseVerified: boolean;
+    hasApplied: boolean;
+    isSaved: boolean;
+    onApply: (jobId: string) => void;
+    onSave: (jobId: string) => void;
+    onUnsave: (jobId: string) => void;
+}
+
+export interface PostJobScreenProps {
+    onJobPosted: (jobData: Omit<Job, 'id' | 'pharmacy' | 'location' | 'status' | 'applicants'>) => void;
+    onNavigateBack: () => void;
+}
+
+export interface ProfileScreenProps {
+    userName: string;
+    userEmail: string;
+    userPhone: string;
+    isContactVerified: boolean;
+    onLogout: () => void;
+    onNavigateBack: () => void;
+    myJobs: Job[];
+    userRole: UserRole;
+    pharmacyAddress?: string;
+    locumsHired?: number;
+    activeJobsCount?: number;
+    uploadedDocuments: UploadedDocuments;
+    onEditDocuments: () => void;
+}
+
 // ======================================================================
 // ========= COMPONENT PROP TYPES =======================================
 // ======================================================================
 
-/**
- * Props for components that need navigation but aren't screens themselves
- */
 export interface NavigationProps {
     navigation: AppNavigationProp;
 }
 
-/**
- * Props for components that handle job interactions
- */
 export interface JobInteractionProps {
     onApply?: (jobId: string) => void;
     onSave?: (jobId: string) => void;
@@ -359,9 +458,6 @@ export interface JobInteractionProps {
     onViewDetails?: (job: Job) => void;
 }
 
-/**
- * Props for components that display user information
- */
 export interface UserInfoProps {
     userName: string;
     userEmail?: string;
@@ -369,18 +465,12 @@ export interface UserInfoProps {
     userRole: UserRole;
 }
 
-/**
- * Props for components that handle document management
- */
 export interface DocumentManagementProps {
     uploadedDocuments: UploadedDocuments;
     onEditDocuments?: () => void;
     isLicenseVerified?: boolean;
 }
 
-/**
- * Props for components that handle applicant management
- */
 export interface ApplicantManagementProps {
     applicants: Applicant[];
     savedApplicants?: Applicant[];
@@ -390,40 +480,76 @@ export interface ApplicantManagementProps {
     onDeclineApplicant?: (applicant: Applicant) => void;
 }
 
-/**
- * Props for components that handle job rating and feedback
- */
 export interface JobRatingProps {
     onRateJob?: (jobId: string, rating: number, feedback?: string) => void;
+    onRatePharmacy?: (jobId: string, rating: number, feedback?: string) => void;
+    onRatePharmacist?: (jobId: string, rating: number, feedback?: string) => void;
     onMarkAsCompleted?: (jobId: string) => void;
 }
+
+// ======================================================================
+// ========= STATE MANAGEMENT TYPES =====================================
+// ======================================================================
+
+export interface AppState {
+    // Authentication
+    isAuthenticated: boolean;
+    isLoading: boolean;
+    isInitializing: boolean;
+
+    // User data
+    userId: string;
+    userRole: UserRole | null;
+    userName: string;
+    userEmail: string;
+    userPhone: string;
+    isPremium: boolean;
+    pharmacyAddress: string;
+
+    // Verification status
+    isLicenseVerified: boolean;
+    isContactVerified: boolean;
+    uploadedDocuments: UploadedDocuments;
+
+    // Job data
+    myJobs: Job[];
+    allJobs: Job[];
+    appliedJobIds: Set<string>;
+    savedJobIds: Set<string>;
+    conversations: Conversation[];
+    jobToReviewId: string | null;
+
+    // Error handling
+    error: string | null;
+    isOffline: boolean;
+}
+
+export type AppAction =
+    | { type: 'SET_LOADING'; payload: boolean }
+    | { type: 'SET_INITIALIZING'; payload: boolean }
+    | { type: 'SET_AUTHENTICATED'; payload: boolean }
+    | { type: 'SET_USER_DATA'; payload: Partial<AppState> }
+    | { type: 'SET_ERROR'; payload: string | null }
+    | { type: 'SET_OFFLINE'; payload: boolean }
+    | { type: 'UPDATE_JOBS'; payload: { myJobs?: Job[]; allJobs?: Job[] } }
+    | { type: 'UPDATE_JOB_INTERACTIONS'; payload: { appliedJobIds?: Set<string>; savedJobIds?: Set<string> } }
+    | { type: 'SET_CONVERSATIONS'; payload: Conversation[] }
+    | { type: 'RESET_STATE' };
 
 // ======================================================================
 // ========= UTILITY TYPES ===========================================
 // ======================================================================
 
-/**
- * Extract the parameters for a specific screen
- */
 export type ScreenParams<T extends keyof AppStackParamList> = AppStackParamList[T];
 
-/**
- * Helper type to ensure navigation calls are type-safe
- */
 export type NavigateTo<T extends keyof AppStackParamList> = AppStackParamList[T] extends undefined
     ? [screen: T] | [screen: T, params?: undefined]
     : [screen: T, params: AppStackParamList[T]];
 
-/**
- * Type guard to check if a screen requires parameters
- */
 export type RequiresParams<T extends keyof AppStackParamList> = AppStackParamList[T] extends undefined
     ? false
     : true;
 
-/**
- * User data interface for persistence (matches mockUserData structure)
- */
 export interface UserData {
     documents: UploadedDocuments;
     isLicenseVerified: boolean;
@@ -431,15 +557,90 @@ export interface UserData {
     isPremium: boolean;
 }
 
-/**
- * Job status types for better type safety
- */
-export type JobStatus = 'Completed' | 'Confirmed' | 'Pending' | 'Cancelled' | 'Active' | 'Closed';
+export type JobStatus = 'completed' | 'confirmed' | 'pending' | 'cancelled' | 'active' | 'closed';
 
-/**
- * Rating scale (1-5 stars)
- */
+
+
+export interface RatingData {
+    jobId: string;
+    rating: number;
+    feedback?: string;
+    raterRole: UserRole;
+    ratedEntity: 'pharmacist' | 'pharmacy';
+}
+
+export interface PharmacistRatings {
+    averageRating: number;
+    totalRatings: number;
+    ratings: RatingData[];
+}
+
+export interface PharmacyRatings {
+    averageRating: number;
+    totalRatings: number;
+    ratings: RatingData[];
+}
+
+export interface RatingModalProps {
+    visible: boolean;
+    job: Job;
+    ratingType: 'pharmacy' | 'pharmacist';
+    onClose: () => void;
+    onSubmitRating: (jobId: string, rating: number, feedback?: string) => void;
+}
+
 export type Rating = 1 | 2 | 3 | 4 | 5;
+
+// ======================================================================
+// ========= ERROR HANDLING TYPES ===================================
+// ======================================================================
+
+export interface ErrorInfo {
+    componentStack: string;
+}
+
+export interface LoadingScreenProps {
+    message?: string;
+    transparent?: boolean;
+}
+
+export interface ErrorBoundaryProps {
+    children: React.ReactNode;
+    fallback?: React.ReactNode;
+}
+
+export interface ErrorBoundaryState {
+    hasError: boolean;
+    error: Error | null;
+    errorInfo: ErrorInfo | null;
+}
+
+// ======================================================================
+// ========= FORM VALIDATION TYPES ==================================
+// ======================================================================
+
+export interface ValidationResult {
+    isValid: boolean;
+    error?: string;
+}
+
+export interface FormField {
+    value: string;
+    error?: string;
+    isValid: boolean;
+    isTouched: boolean;
+}
+
+export interface FormState {
+    [key: string]: FormField;
+}
+
+export interface OnboardingProgress {
+    currentStep: number;
+    totalSteps: number;
+    completedSteps: string[];
+    isComplete: boolean;
+}
 
 // ======================================================================
 // ========= EXPORT CONVENIENCE TYPES ===================================
